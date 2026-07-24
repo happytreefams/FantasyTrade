@@ -1,0 +1,2 @@
+-- AlterEnum
+ALTER TYPE "CourseCategory" ADD VALUE 'PERSONAL_FINANCE';

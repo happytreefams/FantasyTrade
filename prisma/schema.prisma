@@ -1,0 +1,713 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+/// `role` replaces the earlier `isAdmin` boolean (Tier 5) — ADMIN is now one
+/// of three values instead of a separate flag, so there's a single source of
+/// truth for access level. A user becomes TEACHER by creating their first
+/// classroom Group (see `@/lib/groups`'s `createGroup`); nothing ever
+/// downgrades an ADMIN to TEACHER. `displayName`/leaderboard opt-in privacy
+/// fields live on `Account` (see its doc comment), not here, since they're
+/// about exposing portfolio performance specifically.
+model User {
+  id                String    @id @default(cuid())
+  email             String    @unique
+  hashedPassword    String
+  name              String?
+  /// Public-facing name shown on the /leaderboard when the account has opted
+  /// in — kept separate from `name` (the real name used in emails/certificates)
+  /// so a user can choose what strangers see without touching their real name.
+  displayName       String?
+  emailVerified     DateTime?
+  image             String?
+  role              Role      @default(STUDENT)
+  createdAt         DateTime  @default(now())
+  /// Login-streak tracking (consecutive distinct calendar days active),
+  /// updated once per calendar day at sign-in — see `@/lib/streaks`.
+  lastActiveDate    DateTime? @db.Date
+  currentStreak     Int       @default(0)
+  longestStreak     Int       @default(0)
+
+  account        Account?
+  authAccounts   AuthAccount[]
+  sessions       Session[]
+  lessonProgress UserProgress[]
+  quizAttempts   UserQuizAttempt[]
+  certificates   Certificate[]
+  groupsTaught   Group[]
+  badges         UserBadge[]
+}
+
+/// One brokerage account per user. cashBalance is the user's simulated buying power.
+/// Margin fields default an account to long-only/cash: `marginEnabled` must
+/// be explicitly opted into (gated behind the Advanced Trading lessons + a
+/// risk acknowledgment, see `@/lib/trading` and Settings) before a SELL can
+/// open a short position or a margin requirement can be reserved.
+/// `isPublicOnLeaderboard` is opt-in (default false) since performance data
+/// is sensitive; when true, the /leaderboard page ranks this account by
+/// return %, displaying the owning User's `displayName` — never `email` or
+/// `name` unless the user has explicitly set `displayName` to that value.
+/// `groupId` links a student's account into a teacher's classroom (nullable
+/// — most accounts aren't part of a group); see `@/lib/groups`.
+model Account {
+  id                       String    @id @default(cuid())
+  userId                   String    @unique
+  cashBalance              Decimal   @default(1000000.00) @db.Decimal(14, 2)
+  marginEnabled            Boolean   @default(false)
+  /// Derived/recomputed (not incrementally tracked) — see `recomputeMarginUsed`
+  /// in `@/lib/trading`. Simplified margin requirement reserved against open
+  /// short positions, marked-to-market after every trade and by the nightly job.
+  marginUsed               Decimal   @default(0) @db.Decimal(14, 2)
+  /// Set by the nightly maintenance-margin check when equity relative to
+  /// `marginUsed` drops below the maintenance threshold; cleared once it
+  /// recovers. Drives the app-wide margin-call warning banner. Simulated —
+  /// this app never auto-liquidates.
+  marginCallActive         Boolean   @default(false)
+  marginRiskAcknowledgedAt DateTime?
+  isPublicOnLeaderboard    Boolean   @default(false)
+  groupId                  String?
+  createdAt                DateTime  @default(now())
+
+  user                  User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group                 Group?                 @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  positions             Position[]
+  positionLots          PositionLot[]
+  realizedGains         RealizedGain[]
+  orders                Order[]
+  pendingOrders         PendingOrder[]
+  dividendPayments      DividendPayment[]
+  valueHistory          AccountValueHistory[]
+  watchlist             WatchlistItem[]
+  riskProfile           RiskProfile?
+  challengeParticipants ChallengeParticipant[]
+
+  @@map("trading_accounts")
+}
+
+/// OAuth account links required by the NextAuth/Auth.js Prisma adapter.
+/// Named AuthAccount (mapped to "accounts") to avoid colliding with the
+/// brokerage `Account` model above.
+model AuthAccount {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+enum AssetType {
+  STOCK
+  ETF
+  BOND
+  COMMODITY
+  CRYPTO
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+/// Order rows are only ever written at the moment of a terminal fill or
+/// rejection — see `Order`'s doc comment. "PENDING"/"EXPIRED" now live on
+/// `PendingOrderStatus` instead.
+enum OrderStatus {
+  FILLED
+  REJECTED
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP_LOSS
+  STOP_LIMIT
+}
+
+enum PendingOrderType {
+  LIMIT
+  STOP_LOSS
+  STOP_LIMIT
+}
+
+enum PendingOrderStatus {
+  PENDING
+  FILLED
+  CANCELLED
+  EXPIRED
+}
+
+enum PositionDirection {
+  LONG
+  SHORT
+}
+
+enum RiskCategory {
+  CONSERVATIVE
+  MODERATE_CONSERVATIVE
+  MODERATE
+  MODERATE_AGGRESSIVE
+  AGGRESSIVE
+}
+
+enum TaxTerm {
+  SHORT_TERM
+  LONG_TERM
+}
+
+enum CourseCategory {
+  INVESTING_BASICS
+  STOCKS
+  BONDS
+  ETFS
+  RISK_DIVERSIFICATION
+  COMMODITIES
+  MARKET_MECHANICS
+  PERSONAL_FINANCE
+  ADVANCED_TRADING
+}
+
+/// A tradable stock, ETF, bond, commodity, or crypto asset. Bonds/commodities
+/// are represented via ETF proxies so they share the same EOD pricing
+/// pipeline. Real crypto markets trade 24/7 with no daily close — this app
+/// deliberately treats CRYPTO the same as every other asset type (one
+/// simulated close per trading day) rather than modeling continuous trading,
+/// for consistency with the platform's overall T+1 design; see
+/// `@/lib/market-data`'s `updateAllClosingPrices`, which needs no special
+/// case for it.
+model Security {
+  id        String    @id @default(cuid())
+  symbol    String    @unique
+  name      String
+  assetType AssetType
+  exchange  String
+  createdAt DateTime  @default(now())
+
+  priceHistory     PriceHistory[]
+  positions        Position[]
+  positionLots     PositionLot[]
+  realizedGains    RealizedGain[]
+  orders           Order[]
+  pendingOrders    PendingOrder[]
+  dividendPayments DividendPayment[]
+  watchlist        WatchlistItem[]
+  fundamentals     SecurityFundamentals?
+}
+
+/// One row per security per trading day. Trades execute against the most
+/// recent row here (T+1 lag by design — no real-time quotes in this tier).
+model PriceHistory {
+  id         String   @id @default(cuid())
+  securityId String
+  date       DateTime @db.Date
+  closePrice Decimal  @db.Decimal(14, 4)
+  createdAt  DateTime @default(now())
+
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@unique([securityId, date])
+}
+
+/// Slow-changing per-security stats (market cap, valuation ratios, analyst
+/// ratings) — refreshed weekly by a separate job from the daily price close,
+/// since these don't move day to day. One row per security; every stat field
+/// is nullable so a security the pricing API doesn't cover (or a field it
+/// doesn't return) shows as "unavailable" rather than a fake zero.
+model SecurityFundamentals {
+  id                 String   @id @default(cuid())
+  securityId         String   @unique
+  marketCap          BigInt?
+  week52High         Decimal? @db.Decimal(14, 4)
+  week52Low          Decimal? @db.Decimal(14, 4)
+  dividendYield      Decimal? @db.Decimal(8, 4)
+  peRatio            Decimal? @db.Decimal(10, 4)
+  analystTargetPrice Decimal? @db.Decimal(14, 4)
+  analystStrongBuy   Int?
+  analystBuy         Int?
+  analystHold        Int?
+  analystSell        Int?
+  analystStrongSell  Int?
+  /// GICS-style sector (e.g. "TECHNOLOGY") — populated from the same OVERVIEW
+  /// fetch as the other fields. Only meaningful for stocks/ETFs; bond and
+  /// commodity holdings are grouped by asset type instead in the sector
+  /// allocation view, not by this field.
+  sector             String?
+  industry           String?
+  updatedAt          DateTime @updatedAt
+
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+}
+
+/// Current holdings for an account. One row per (account, security).
+/// `quantity` can be negative — a net short position — in which case
+/// `avgCostBasis` is the average price the shares were sold short at; the
+/// market-value/unrealized-gain math elsewhere is signed arithmetic that
+/// already produces the correct (inverse-of-long) result for a negative
+/// quantity without any special-casing. `dripEnabled` only has an effect for
+/// dividend-paying long positions — see `@/lib/dividends`.
+model Position {
+  id           String  @id @default(cuid())
+  accountId    String
+  securityId   String
+  quantity     Decimal @db.Decimal(20, 6)
+  avgCostBasis Decimal @db.Decimal(14, 4)
+  dripEnabled  Boolean @default(false)
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, securityId])
+}
+
+/// One purchase (LONG) or short-sale (SHORT) lot per BUY/SELL fill that
+/// opens or adds to a position — the source of truth for cost basis and
+/// realized gains. `quantity` is what's left open (0 once fully consumed by
+/// a later sell/cover); `originalQuantity` never changes, so a lot's history
+/// stays visible. For a SHORT lot, `costBasis` is the price it was sold
+/// short at (still a positive per-share price — direction carries the sign
+/// meaning, not the number). `Position` is a cache derived from open lots
+/// (long minus short) — recomputed after every trade, never written
+/// independently. At most one direction has open lots for a given
+/// (account, security) at a time — see `@/lib/trading`.
+model PositionLot {
+  id               String            @id @default(cuid())
+  accountId        String
+  securityId       String
+  direction        PositionDirection @default(LONG)
+  quantity         Decimal           @db.Decimal(20, 6)
+  originalQuantity Decimal           @db.Decimal(20, 6)
+  costBasis        Decimal           @db.Decimal(14, 4)
+  purchaseDate     DateTime          @default(now())
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, securityId, purchaseDate])
+}
+
+/// One row per lot (or partial lot) consumed by a SELL (closing a LONG lot)
+/// or a BUY-to-cover (closing a SHORT lot) — the simulated capital-gains
+/// ledger. `costBasis`/`proceeds`/`gainLoss` are totals for `quantity`, not
+/// per-share. For a LONG closure, `costBasis` is the original purchase price
+/// and `proceeds` the sale price (chronological order); for a SHORT closure
+/// (`direction: SHORT`) it's reversed in time but not in field meaning —
+/// `proceeds` is what was received opening the short and `costBasis` is what
+/// it cost to buy back and close it — so `gainLoss = proceeds - costBasis`
+/// stays correct either way (positive for a short when price fell). `term`
+/// follows the common 365-day short/long threshold; see the Tax Lots page
+/// for the "this is simulated, not tax advice" disclaimer — real treatment
+/// depends on jurisdiction and account type.
+model RealizedGain {
+  id                String            @id @default(cuid())
+  accountId         String
+  securityId        String
+  direction         PositionDirection @default(LONG)
+  quantity          Decimal           @db.Decimal(20, 6)
+  costBasis         Decimal           @db.Decimal(14, 4)
+  proceeds          Decimal           @db.Decimal(14, 4)
+  gainLoss          Decimal           @db.Decimal(14, 4)
+  holdingPeriodDays Int
+  term              TaxTerm
+  closedAt          DateTime          @default(now())
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, closedAt])
+}
+
+/// Immutable trade history / audit log — every row is a terminal FILLED or
+/// REJECTED fill, written at the moment of execution/rejection. All
+/// "working order" state (a queued LIMIT/STOP_LOSS/STOP_LIMIT order still
+/// awaiting its trigger) lives in `PendingOrder` instead; when one of those
+/// fills or is rejected by the daily-close job, this is the row that gets
+/// written. `triggerPrice`/`limitPrice` are carried over from the
+/// originating `PendingOrder` (if any) purely for historical display —
+/// immediate MARKET fills leave both null.
+model Order {
+  id               String      @id @default(cuid())
+  accountId        String
+  securityId       String
+  side             OrderSide
+  orderType        OrderType   @default(MARKET)
+  quantity         Decimal     @db.Decimal(20, 6)
+  triggerPrice     Decimal?    @db.Decimal(14, 4)
+  limitPrice       Decimal?    @db.Decimal(14, 4)
+  priceAtExecution Decimal?    @db.Decimal(14, 4)
+  status           OrderStatus
+  createdAt        DateTime    @default(now())
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+}
+
+/// A standing order awaiting its trigger condition — LIMIT, STOP_LOSS, or
+/// STOP_LIMIT (consolidates the Tier 3 limit-order mechanics that used to
+/// live directly on `Order`). Unlike those Tier 3 limit orders — day-only,
+/// auto-expiring the very next close if unmet — these persist indefinitely
+/// (or until `expiresAt`) until filled or cancelled, evaluated against every
+/// day's new close by the daily-close job. `triggerPrice` is the limit price
+/// itself for a LIMIT order, or the stop price for STOP_LOSS/STOP_LIMIT;
+/// `limitPrice` is only set for STOP_LIMIT (the price to use once the stop
+/// triggers). See `@/lib/trading`'s `evaluatePendingOrders`.
+model PendingOrder {
+  id           String             @id @default(cuid())
+  accountId    String
+  securityId   String
+  side         OrderSide
+  orderType    PendingOrderType
+  triggerPrice Decimal            @db.Decimal(14, 4)
+  limitPrice   Decimal?           @db.Decimal(14, 4)
+  quantity     Decimal            @db.Decimal(20, 6)
+  status       PendingOrderStatus @default(PENDING)
+  createdAt    DateTime           @default(now())
+  expiresAt    DateTime?
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@index([status, securityId])
+}
+
+/// A simulated quarterly dividend payment for a held, dividend-paying
+/// position. This app has no real dividend declaration/ex-date/payment-date
+/// calendar, so the amount and timing are illustrative only — see
+/// `@/lib/dividends` — not a real corporate action. Posted at most once per
+/// (account, security, calendar quarter) by the daily-close job; if the
+/// position's `dripEnabled` was set, the cash was immediately reinvested
+/// into more (fractional) shares instead of sitting as cash.
+model DividendPayment {
+  id             String   @id @default(cuid())
+  accountId      String
+  securityId     String
+  sharesHeld     Decimal  @db.Decimal(20, 6)
+  amountPerShare Decimal  @db.Decimal(14, 6)
+  totalAmount    Decimal  @db.Decimal(14, 2)
+  paidAt         DateTime @default(now())
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, securityId, paidAt])
+}
+
+/// One snapshot per account per trading day, written by the overnight
+/// valuation job. Powers the dashboard's day-over-day performance chart.
+model AccountValueHistory {
+  id         String   @id @default(cuid())
+  accountId  String
+  date       DateTime @db.Date
+  totalValue Decimal  @db.Decimal(14, 2)
+  createdAt  DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, date])
+}
+
+/// A starred security on an account's watchlist.
+model WatchlistItem {
+  id         String   @id @default(cuid())
+  accountId  String
+  securityId String
+  createdAt  DateTime @default(now())
+
+  account  Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  security Security @relation(fields: [securityId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, securityId])
+}
+
+/// A risk-tolerance questionnaire result, one per account — retaking
+/// overwrites score/category/answers/completedAt rather than keeping a
+/// history, since this reflects the account's *current* risk profile, not
+/// a log of past attempts. `answers` stores the raw question→selected-option
+/// map for reference/debugging; `score`/`category` are the derived values
+/// the app actually reads.
+model RiskProfile {
+  id          String       @id @default(cuid())
+  accountId   String       @unique
+  score       Int
+  category    RiskCategory
+  answers     Json
+  completedAt DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+/// A toggle for a not-yet-fully-launched or optional feature (e.g. a future
+/// leaderboard, recurring deposits, multiple accounts per user). Checked via
+/// `@/lib/feature-flags`; defaults to off so new keys are opt-in. Seeded (not
+/// migrated) so flags can be added/edited by re-running the seed or flipped
+/// live from /admin without a schema change.
+model FeatureFlag {
+  key         String   @id
+  enabled     Boolean  @default(false)
+  description String
+  updatedAt   DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Learning portal. Content is authored via prisma/seed-learning.ts (an
+// "admin-lite" path — re-run the seed to add/edit courses; no CMS for now).
+// IDs are assigned explicitly in that seed (not auto-cuid) so app code can
+// cross-link to a specific lesson/course by a stable, human-readable ID.
+// ---------------------------------------------------------------------------
+
+/// A top-level learning topic (e.g. "What Is a Stock?"), grouped by category
+/// in the /learn catalog.
+model Course {
+  id          String         @id
+  title       String
+  description String
+  category    CourseCategory
+  order       Int
+
+  lessons Lesson[]
+}
+
+/// One short reading within a course. `content` is a small markdown subset
+/// (paragraphs, **bold**, *italic*, "- " bullet lists, "## " subheadings) —
+/// see src/components/markdown-content.tsx for what's supported.
+model Lesson {
+  id       String @id
+  courseId String
+  title    String
+  content  String @db.Text
+  order    Int
+
+  course        Course         @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  quiz          Quiz?
+  progress      UserProgress[]
+  glossaryTerms Glossary[]
+}
+
+/// One quiz per lesson, taken after reading it.
+model Quiz {
+  id       String @id
+  lessonId String @unique
+  title    String
+
+  lesson    Lesson            @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  questions QuizQuestion[]
+  attempts  UserQuizAttempt[]
+}
+
+/// `choices` is a JSON array of strings; `correctAnswerIndex` indexes into it.
+model QuizQuestion {
+  id                 String @id
+  quizId             String
+  question           String
+  choices            Json
+  correctAnswerIndex Int
+  explanation        String
+
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+}
+
+/// Marks a lesson as read by a user. One row per (user, lesson).
+model UserProgress {
+  id          String   @id @default(cuid())
+  userId      String
+  lessonId    String
+  completedAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+}
+
+/// One row per quiz attempt (retakes allowed — each attempt is its own row).
+/// `score` is a 0-100 percentage of questions answered correctly.
+model UserQuizAttempt {
+  id          String   @id @default(cuid())
+  userId      String
+  quizId      String
+  score       Int
+  completedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quiz Quiz @relation(fields: [quizId], references: [id], onDelete: Cascade)
+}
+
+/// A financial term with a plain-language definition, rendered inline as a
+/// hover/tap tooltip wherever it appears in lesson content (and a few
+/// hand-picked spots like the security Analytics stats grid) via
+/// `<GlossaryTerm>`, and listed on the standalone /learn/glossary page.
+/// `id` is an explicit slug (not a cuid) so lesson content and other code
+/// can be reasonably confident about term identity across re-seeds — see
+/// prisma/seed-glossary.ts, the "admin-lite" content source, same pattern
+/// as Course/Lesson.
+model Glossary {
+  id              String  @id
+  term            String  @unique
+  definition      String
+  relatedLessonId String?
+
+  relatedLesson Lesson? @relation(fields: [relatedLessonId], references: [id], onDelete: SetNull)
+}
+
+enum CertificateScope {
+  COURSE
+  CATEGORY
+}
+
+/// An earned completion certificate — issued automatically the moment a
+/// user finishes every lesson and passes every quiz (score >=
+/// QUIZ_PASSING_SCORE, see @/lib/constants) in a `Course` (scope COURSE,
+/// `courseId` set) or every course in a `CourseCategory` (scope CATEGORY,
+/// `category` set). Exactly one of `courseId`/`category` is set depending
+/// on `scope`. `title` is a snapshot of the course/category name at
+/// issuance time (simple and immutable; course titles don't change in this
+/// app anyway) — see @/lib/certificates for the issuance check and PDF
+/// generation.
+model Certificate {
+  id        String            @id @default(cuid())
+  userId    String
+  scope     CertificateScope
+  courseId  String?
+  category  CourseCategory?
+  title     String
+  issuedAt  DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scope, courseId, category], name: "userCertificate")
+}
+
+// ---------------------------------------------------------------------------
+// Classroom / group mode, trading challenges, and badges/streaks.
+// ---------------------------------------------------------------------------
+
+/// A teacher's classroom. Students join via `joinCode` (during signup or from
+/// Settings — see `@/lib/groups`); their Account's `groupId` is set to this
+/// group's `id`, and if they haven't traded yet their `cashBalance` is reset
+/// to `startingCash` (see `joinGroup`'s doc comment for exactly when that
+/// applies). `startingCash` defaults to the platform's normal starting
+/// balance but a teacher can override it at creation time.
+model Group {
+  id           String   @id @default(cuid())
+  name         String
+  teacherId    String
+  joinCode     String   @unique
+  startingCash Decimal  @default(1000000.00) @db.Decimal(14, 2)
+  createdAt    DateTime @default(now())
+
+  teacher    User        @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  accounts   Account[]
+  challenges Challenge[]
+}
+
+/// A trading challenge — open/global if `groupId` is null, otherwise scoped
+/// to one teacher's classroom. Deliberately NOT an isolated sub-portfolio:
+/// see `ChallengeParticipant`'s doc comment and ARCHITECTURE.md for the
+/// baseline-snapshot design and its known limitation.
+model Challenge {
+  id          String   @id @default(cuid())
+  name        String
+  description String
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  groupId     String?
+  createdAt   DateTime @default(now())
+
+  group        Group?                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  participants ChallengeParticipant[]
+}
+
+/// Joining a challenge snapshots the account's current total value as
+/// `baselineValue`; standings rank participants by % change from that
+/// baseline over the challenge window. This is the SAME brokerage account
+/// used for all of a user's regular trading — not an isolated challenge-only
+/// portfolio (that would need the multi-account-per-user feature noted as
+/// future scope back in Tier 5/ARCHITECTURE.md). A user's ordinary trading
+/// during the challenge window therefore also moves their challenge
+/// standing. See ARCHITECTURE.md for the full writeup.
+model ChallengeParticipant {
+  id            String   @id @default(cuid())
+  challengeId   String
+  accountId     String
+  baselineValue Decimal  @db.Decimal(14, 2)
+  joinedAt      DateTime @default(now())
+
+  challenge Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([challengeId, accountId])
+}
+
+/// A definition for an earnable achievement — seeded content (admin-lite,
+/// same pattern as Course/Glossary; see prisma/seed-badges.ts), not something
+/// created through the UI. `code` is the stable programmatic key application
+/// code checks against (e.g. "FIRST_TRADE"); `id` is a separate cuid so the
+/// seed can upsert on `code` without caring about id stability.
+model Badge {
+  id          String @id @default(cuid())
+  code        String @unique
+  name        String
+  description String
+  icon        String
+
+  users UserBadge[]
+}
+
+/// One row per (user, badge) the user has earned — see `@/lib/badges` for
+/// the award-checking functions run after trades, course completions, logins,
+/// etc. Earning is a one-way, one-time event (no "un-earning").
+model UserBadge {
+  id       String   @id @default(cuid())
+  userId   String
+  badgeId  String
+  earnedAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badge Badge @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeId])
+}
