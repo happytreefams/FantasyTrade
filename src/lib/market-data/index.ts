@@ -1,5 +1,6 @@
 import { Prisma, type AssetType, type PrismaClient, type Security, type SecurityFundamentals } from "@prisma/client";
 
+import { withJobRun } from "@/lib/job-runs";
 import { prisma as defaultPrisma } from "@/lib/prisma";
 
 import { previousTradingDay } from "./calendar";
@@ -7,11 +8,17 @@ import {
   ALPHA_VANTAGE_FREE_TIER_MAX_REQUESTS_PER_DAY,
   ALPHA_VANTAGE_REQUEST_INTERVAL_MS,
 } from "./providers/alpha-vantage";
-import { getMarketDataProvider, type NewsHeadline } from "./providers";
+import { getFundamentalsProvider, getPricingProvider, type NewsHeadline } from "./providers";
+import {
+  TWELVE_DATA_BATCH_SIZE,
+  TWELVE_DATA_FREE_TIER_MAX_REQUESTS_PER_DAY,
+  TWELVE_DATA_REQUEST_INTERVAL_MS,
+  TWELVE_DATA_SINGLE_REQUEST_INTERVAL_MS,
+} from "./providers/twelve-data";
 
 export { isTradingDay, isUsMarketHoliday, previousTradingDay } from "./calendar";
 export type { EodQuote, MarketDataProvider, NewsHeadline } from "./providers";
-export { getMarketDataProvider } from "./providers";
+export { getFundamentalsProvider, getPricingProvider } from "./providers";
 
 type Client = PrismaClient | Prisma.TransactionClient;
 
@@ -113,7 +120,7 @@ export async function getFundamentals(
 /// Resolves to null on any provider failure (bad symbol, rate limit, missing
 /// API key) so the caller can render an empty state.
 export async function getNews(symbol: string): Promise<NewsHeadline[] | null> {
-  return getMarketDataProvider().fetchNews(symbol);
+  return getFundamentalsProvider().fetchNews(symbol);
 }
 
 /// A small random walk off the last known price (+/- 2%), used whenever the
@@ -140,34 +147,61 @@ function sleep(ms: number): Promise<void> {
 
 /// The daily-close job's core routine: for every Security, records a
 /// PriceHistory row for the most recent trading day, preferring a real quote
-/// from the active MarketDataProvider and falling back to a synthetic price
-/// for whatever the provider can't supply (rate limit, bad symbol, outage, or
-/// symbols beyond the free-tier daily budget). Swapping providers never
-/// touches this function — see `providers/index.ts`.
+/// from the active pricing MarketDataProvider (Twelve Data — see
+/// `getPricingProvider`) and falling back to a synthetic price for whatever
+/// the provider can't supply (rate limit, bad symbol, outage, or symbols
+/// beyond the free-tier daily budget). Swapping providers never touches this
+/// function — see `providers/index.ts`.
+///
+/// `offset`/`limit` restrict the run to one slice of the full (alphabetical,
+/// so stable across calls) security list — for splitting the job across
+/// several Vercel cron invocations that each stay within a function's
+/// duration limit (see `/api/cron/daily-prices`). `maxApiCallsPerRun` is
+/// still the GLOBAL daily budget, not a per-batch one: it's compared against
+/// each security's position in the FULL list (`offset` + its position in
+/// this slice), so a security's real-vs-synthetic outcome only depends on
+/// where it falls in the whole day's budget — not on which batch happens to
+/// contain it. Every security in every batch still gets a price written
+/// (real or synthetic); batching only changes how many can be real today.
+///
+/// When the provider supports `fetchEodCloseBatch` (Twelve Data does), the
+/// slice is chunked into `batchSize`-symbol groups and fetched with one HTTP
+/// call per chunk instead of one call per symbol — see
+/// `TWELVE_DATA_BATCH_SIZE`'s doc comment for why that's sized to the
+/// per-minute credit cap, and why the sleep between chunks (`requestIntervalMs`,
+/// defaulting to `TWELVE_DATA_REQUEST_INTERVAL_MS`) is paced per-chunk rather
+/// than per-symbol as a result. Providers without batch support fall back to
+/// the original one-symbol-per-request loop.
 export async function updateAllClosingPrices(options?: {
   client?: PrismaClient;
   maxApiCallsPerRun?: number;
   requestIntervalMs?: number;
+  batchSize?: number;
+  offset?: number;
+  limit?: number;
 }): Promise<PriceUpdateSummary> {
   const client = options?.client ?? defaultPrisma;
-  const maxApiCallsPerRun = options?.maxApiCallsPerRun ?? ALPHA_VANTAGE_FREE_TIER_MAX_REQUESTS_PER_DAY;
-  const requestIntervalMs = options?.requestIntervalMs ?? ALPHA_VANTAGE_REQUEST_INTERVAL_MS;
-  const provider = getMarketDataProvider();
+  const maxApiCallsPerRun = options?.maxApiCallsPerRun ?? TWELVE_DATA_FREE_TIER_MAX_REQUESTS_PER_DAY;
+  const requestIntervalMs = options?.requestIntervalMs ?? TWELVE_DATA_REQUEST_INTERVAL_MS;
+  const batchSize = options?.batchSize ?? TWELVE_DATA_BATCH_SIZE;
+  const offset = options?.offset ?? 0;
+  const provider = getPricingProvider();
 
   const targetDate = previousTradingDay();
-  const securities = await client.security.findMany({ orderBy: { symbol: "asc" } });
+  const securities = await client.security.findMany({
+    orderBy: { symbol: "asc" },
+    skip: offset,
+    take: options?.limit,
+  });
 
   const fetchedFromApi: string[] = [];
   const synthetic: string[] = [];
   const skippedOverDailyBudget: string[] = [];
 
-  for (let index = 0; index < securities.length; index += 1) {
-    const security = securities[index];
-    const withinBudget = index < maxApiCallsPerRun;
-
-    const quote = withinBudget ? await provider.fetchEodClose(security.symbol) : null;
-    if (!withinBudget) skippedOverDailyBudget.push(security.symbol);
-
+  async function writePriceForSecurity(
+    security: Security,
+    quote: { date: string; closePrice: number } | null,
+  ): Promise<void> {
     let closePrice: Prisma.Decimal;
     if (quote) {
       closePrice = new Prisma.Decimal(quote.closePrice);
@@ -184,10 +218,48 @@ export async function updateAllClosingPrices(options?: {
       update: { closePrice },
       create: { securityId: security.id, date: targetDate, closePrice },
     });
+  }
 
-    const isLastRequestOfRun = index === securities.length - 1 || index === maxApiCallsPerRun - 1;
-    if (withinBudget && !isLastRequestOfRun) {
-      await sleep(requestIntervalMs);
+  if (provider.fetchEodCloseBatch) {
+    for (let chunkStart = 0; chunkStart < securities.length; chunkStart += batchSize) {
+      const chunk = securities.slice(chunkStart, chunkStart + batchSize);
+      const withinBudgetChunk = chunk.filter((_, i) => offset + chunkStart + i < maxApiCallsPerRun);
+      const overBudgetChunk = chunk.filter((_, i) => offset + chunkStart + i >= maxApiCallsPerRun);
+      overBudgetChunk.forEach((security) => skippedOverDailyBudget.push(security.symbol));
+
+      const quotes =
+        withinBudgetChunk.length > 0
+          ? await provider.fetchEodCloseBatch(withinBudgetChunk.map((security) => security.symbol))
+          : {};
+
+      for (const security of withinBudgetChunk) {
+        await writePriceForSecurity(security, quotes[security.symbol] ?? null);
+      }
+      for (const security of overBudgetChunk) {
+        await writePriceForSecurity(security, null);
+      }
+
+      const isLastChunk = chunkStart + batchSize >= securities.length;
+      const isPastGlobalBudget = offset + chunkStart + chunk.length >= maxApiCallsPerRun;
+      if (!isLastChunk && !isPastGlobalBudget) {
+        await sleep(requestIntervalMs);
+      }
+    }
+  } else {
+    for (let localIndex = 0; localIndex < securities.length; localIndex += 1) {
+      const security = securities[localIndex];
+      const globalIndex = offset + localIndex;
+      const withinBudget = globalIndex < maxApiCallsPerRun;
+
+      const quote = withinBudget ? await provider.fetchEodClose(security.symbol) : null;
+      if (!withinBudget) skippedOverDailyBudget.push(security.symbol);
+      await writePriceForSecurity(security, quote);
+
+      const isLastRequestOfBatch = localIndex === securities.length - 1;
+      const isLastRequestOfGlobalBudget = globalIndex === maxApiCallsPerRun - 1;
+      if (withinBudget && !isLastRequestOfBatch && !isLastRequestOfGlobalBudget) {
+        await sleep(requestIntervalMs);
+      }
     }
   }
 
@@ -207,25 +279,65 @@ export type FundamentalsUpdateSummary = {
 /// whatever fundamentals row it already has (or none), surfaced by the UI as
 /// "unavailable" rather than invented. Shares the same rate-limit pacing as
 /// `updateAllClosingPrices` since it hits the same free-tier API.
+///
+/// `offset`/`limit` restrict the run to one slice of the security list, same
+/// purpose and global-budget semantics as `updateAllClosingPrices` — see its
+/// doc comment. Not needed for the default weekly schedule (one run already
+/// fits comfortably within the budget/duration limits, see DEPLOYMENT.md),
+/// but available for an admin to target a specific slice on demand.
+/// Wraps `updateAllFundamentalsInner` with a "weekly-fundamentals" JobRun
+/// (see `@/lib/job-runs`) — covers the cron route, the admin manual
+/// trigger, and `pnpm job:weekly-fundamentals` with one implementation.
+/// PARTIAL means the run hit its budget before covering the full universe
+/// (not itself a failure, but incomplete); "unavailable" symbols don't
+/// affect status — many asset types (ETFs, bonds, crypto) simply have no
+/// fundamentals coverage, so treating that as a failure would make every
+/// run PARTIAL forever.
 export async function updateAllFundamentals(options?: {
   client?: PrismaClient;
   maxApiCallsPerRun?: number;
   requestIntervalMs?: number;
+  offset?: number;
+  limit?: number;
+}): Promise<FundamentalsUpdateSummary> {
+  return withJobRun(
+    "weekly-fundamentals",
+    () => updateAllFundamentalsInner(options),
+    (summary) => ({
+      status: summary.skippedOverWeeklyBudget.length > 0 ? "PARTIAL" : "SUCCESS",
+      symbolsProcessed: summary.updated.length + summary.unavailable.length,
+    }),
+    options?.client,
+  );
+}
+
+async function updateAllFundamentalsInner(options?: {
+  client?: PrismaClient;
+  maxApiCallsPerRun?: number;
+  requestIntervalMs?: number;
+  offset?: number;
+  limit?: number;
 }): Promise<FundamentalsUpdateSummary> {
   const client = options?.client ?? defaultPrisma;
   const maxApiCallsPerRun = options?.maxApiCallsPerRun ?? ALPHA_VANTAGE_FREE_TIER_MAX_REQUESTS_PER_DAY;
   const requestIntervalMs = options?.requestIntervalMs ?? ALPHA_VANTAGE_REQUEST_INTERVAL_MS;
-  const provider = getMarketDataProvider();
+  const offset = options?.offset ?? 0;
+  const provider = getFundamentalsProvider();
 
-  const securities = await client.security.findMany({ orderBy: { symbol: "asc" } });
+  const securities = await client.security.findMany({
+    orderBy: { symbol: "asc" },
+    skip: offset,
+    take: options?.limit,
+  });
 
   const updated: string[] = [];
   const unavailable: string[] = [];
   const skippedOverWeeklyBudget: string[] = [];
 
-  for (let index = 0; index < securities.length; index += 1) {
-    const security = securities[index];
-    const withinBudget = index < maxApiCallsPerRun;
+  for (let localIndex = 0; localIndex < securities.length; localIndex += 1) {
+    const security = securities[localIndex];
+    const globalIndex = offset + localIndex;
+    const withinBudget = globalIndex < maxApiCallsPerRun;
 
     if (!withinBudget) {
       skippedOverWeeklyBudget.push(security.symbol);
@@ -261,8 +373,9 @@ export async function updateAllFundamentals(options?: {
       updated.push(security.symbol);
     }
 
-    const isLastRequestOfRun = index === securities.length - 1 || index === maxApiCallsPerRun - 1;
-    if (!isLastRequestOfRun) {
+    const isLastRequestOfBatch = localIndex === securities.length - 1;
+    const isLastRequestOfGlobalBudget = globalIndex === maxApiCallsPerRun - 1;
+    if (!isLastRequestOfBatch && !isLastRequestOfGlobalBudget) {
       await sleep(requestIntervalMs);
     }
   }
@@ -281,7 +394,7 @@ export async function backfillPriceHistory(
   client: Client = defaultPrisma,
 ): Promise<{ daysStored: number }> {
   const security = await client.security.findUniqueOrThrow({ where: { id: securityId } });
-  const provider = getMarketDataProvider();
+  const provider = getPricingProvider();
   const history = await provider.fetchDailyHistory(security.symbol);
   if (!history) return { daysStored: 0 };
 
@@ -313,8 +426,8 @@ export async function backfillAllPriceHistory(options?: {
   requestIntervalMs?: number;
 }): Promise<BulkBackfillSummary> {
   const client = options?.client ?? defaultPrisma;
-  const maxApiCallsPerRun = options?.maxApiCallsPerRun ?? ALPHA_VANTAGE_FREE_TIER_MAX_REQUESTS_PER_DAY;
-  const requestIntervalMs = options?.requestIntervalMs ?? ALPHA_VANTAGE_REQUEST_INTERVAL_MS;
+  const maxApiCallsPerRun = options?.maxApiCallsPerRun ?? TWELVE_DATA_FREE_TIER_MAX_REQUESTS_PER_DAY;
+  const requestIntervalMs = options?.requestIntervalMs ?? TWELVE_DATA_SINGLE_REQUEST_INTERVAL_MS;
 
   const securities = await client.security.findMany({ orderBy: { symbol: "asc" } });
 

@@ -1,13 +1,11 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { useToast } from "@/components/toast-provider";
 
 export function CreateGroupForm() {
-  const router = useRouter();
   const { update } = useSession();
   const { showToast } = useToast();
   const [name, setName] = useState("");

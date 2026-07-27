@@ -47,6 +47,18 @@ export interface MarketDataProvider {
   /// synthetic price in that case.
   fetchEodClose(symbol: string): Promise<EodQuote | null>;
 
+  /// Optional: fetches EOD closes for MULTIPLE symbols in a single HTTP
+  /// round trip, for providers whose API supports batched/multi-symbol
+  /// requests (e.g. Twelve Data's `time_series?symbol=A,B,C`). Each symbol
+  /// still consumes its own request credit against the provider's quota —
+  /// batching cuts round-trip COUNT, not API usage — but fewer round trips
+  /// matters for fitting a symbol shard inside a serverless function's
+  /// execution-duration budget. Must return one entry per requested symbol
+  /// (null for any the provider couldn't supply), same null-on-failure
+  /// contract as `fetchEodClose`. Providers without batch support simply
+  /// omit this method — callers fall back to `fetchEodClose` per symbol.
+  fetchEodCloseBatch?(symbols: string[]): Promise<Record<string, EodQuote | null>>;
+
   /// Fetches as much daily-close history as the provider has for `symbol`
   /// (ideally 5+ years), oldest first or any order — callers sort. Same
   /// null-on-any-failure contract as `fetchEodClose`.

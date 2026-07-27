@@ -3,19 +3,19 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
+import { env } from "@/lib/env";
 import { runDailyClose } from "@/lib/daily-close";
 
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg({ connectionString: env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 /// The overnight valuation job. Run manually in local dev with
-/// `pnpm job:daily-close` (see README). In a real deployment this is what a
-/// nightly cron / scheduled task would invoke after market close. Also
-/// triggerable on demand from /admin — see `@/lib/daily-close`.
+/// `pnpm job:daily-close` (see README). In production this is what
+/// `/api/cron/daily-prices` invokes on Vercel's schedule (see
+/// `@/app/api/cron/daily-prices/route.ts` and DEPLOYMENT.md) — also
+/// triggerable on demand from /admin. See `@/lib/daily-close`.
 async function main() {
-  const maxApiCallsPerRun = process.env.MARKET_DATA_MAX_DAILY_CALLS
-    ? Number(process.env.MARKET_DATA_MAX_DAILY_CALLS)
-    : undefined;
+  const maxApiCallsPerRun = env.MARKET_DATA_MAX_DAILY_CALLS;
 
   console.log("Running daily close...");
   const { priceUpdate, pendingOrders, dividends, marginMaintenance, accountsSnapshotted } = await runDailyClose({

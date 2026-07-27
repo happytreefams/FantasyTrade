@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma migrate deploy && next build",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
@@ -15,6 +15,7 @@
     "db:seed": "prisma db seed",
     "job:daily-close": "tsx scripts/daily-close.ts",
     "job:weekly-fundamentals": "tsx scripts/weekly-fundamentals.ts",
+    "job:backfill-history": "tsx scripts/backfill-history.ts",
     "migrate:backfill-position-lots": "tsx scripts/backfill-position-lots.ts"
   },
   "dependencies": {

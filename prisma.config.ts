@@ -3,6 +3,19 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
+// Prisma 7 dropped `url`/`directUrl` from the schema file (see
+// prisma/schema.prisma's datasource block) — this `datasource.url` is now
+// the only place Prisma Migrate/introspection get a connection string from.
+// It's deliberately DIRECT_URL (Neon's unpooled connection), not
+// DATABASE_URL: Migrate needs a direct session, not one routed through
+// PgBouncer's transaction pooling, which can break the advisory locks and
+// multi-statement transactions a migration runs. Falls back to DATABASE_URL
+// when DIRECT_URL isn't set (local dev's single Postgres instance has no
+// pooled/direct distinction, so there's only one URL to give it).
+//
+// The running app never reads this — it connects via `@prisma/adapter-pg`
+// with its own connectionString (env.DATABASE_URL, the pooled one) in
+// src/lib/prisma.ts, entirely independent of this file.
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
@@ -10,6 +23,6 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
-    url: process.env["DATABASE_URL"],
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });

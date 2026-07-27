@@ -5,6 +5,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Prisma 7 no longer accepts `url`/`directUrl` in the schema file itself —
+// both are configured in prisma.config.ts's `datasource` block instead (see
+// that file). This declares only the provider, per Prisma 7's
+// config-datasource model: https://pris.ly/d/config-datasource
 datasource db {
   provider = "postgresql"
 }
@@ -221,6 +225,8 @@ enum CourseCategory {
 /// case for it.
 model Security {
   id        String    @id @default(cuid())
+  /// `@unique` already gives this an index (used by `getSecurityBySymbol` and
+  /// the seed's upsert-by-symbol) — no separate `@@index` needed here.
   symbol    String    @unique
   name      String
   assetType AssetType
@@ -236,6 +242,12 @@ model Security {
   dividendPayments DividendPayment[]
   watchlist        WatchlistItem[]
   fundamentals     SecurityFundamentals?
+
+  /// `searchSecurities` filters on `name` (case-insensitive `contains`) —
+  /// added once the S&P 500 seed brought the table to ~10x its original row
+  /// count. At this size a full scan is still sub-millisecond, but the index
+  /// keeps the query planner's options open as the universe grows further.
+  @@index([name])
 }
 
 /// One row per security per trading day. Trades execute against the most
@@ -680,6 +692,36 @@ model ChallengeParticipant {
   account   Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([challengeId, accountId])
+}
+
+enum JobRunStatus {
+  SUCCESS
+  FAILED
+  PARTIAL
+}
+
+/// One row per attempted invocation of a background job (the daily price
+/// job, portfolio revaluation, the weekly fundamentals refresh, quarterly
+/// dividends) — cron, admin manual-trigger, and local CLI script runs all
+/// write here via `@/lib/job-runs`, so a silent failure (a Vercel function
+/// timeout, an uncaught error, a provider outage) is visible on the admin
+/// dashboard's Job History panel instead of only in Vercel's function logs.
+/// `status` is left null until the job finishes — a row with `finishedAt`
+/// still null well after `startedAt` is itself a visible signal that the
+/// invocation never completed (e.g. got killed by a duration timeout,
+/// which happens outside the route's own try/catch and so would otherwise
+/// leave no trace at all). See DEPLOYMENT.md's diagnosed-incident writeup
+/// for the failure this was built to catch.
+model JobRun {
+  id               String        @id @default(cuid())
+  jobName          String
+  startedAt        DateTime      @default(now())
+  finishedAt       DateTime?
+  status           JobRunStatus?
+  symbolsProcessed Int?
+  errorMessage     String?       @db.Text
+
+  @@index([jobName, startedAt])
 }
 
 /// A definition for an earnable achievement — seeded content (admin-lite,

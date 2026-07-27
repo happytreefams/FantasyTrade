@@ -5,8 +5,9 @@ import { BackfillTrigger } from "@/components/admin/backfill-trigger";
 import { DailyCloseTrigger } from "@/components/admin/daily-close-trigger";
 import { FeatureFlagToggle } from "@/components/admin/feature-flag-toggle";
 import { FundamentalsTrigger } from "@/components/admin/fundamentals-trigger";
+import { QuarterlyDividendsTrigger } from "@/components/admin/quarterly-dividends-trigger";
 import { CreateChallengeForm } from "@/components/create-challenge-form";
-import { AdminAccessError, listSecurities, listUsers, requireAdmin } from "@/lib/admin";
+import { AdminAccessError, listRecentJobRuns, listSecurities, listUsers, requireAdmin } from "@/lib/admin";
 import { getAllFeatureFlags } from "@/lib/feature-flags";
 import { formatAsOfDate, formatCurrency } from "@/lib/format";
 
@@ -20,7 +21,12 @@ export default async function AdminPage() {
     throw error;
   }
 
-  const [users, securities, flags] = await Promise.all([listUsers(), listSecurities(), getAllFeatureFlags()]);
+  const [users, securities, flags, jobRuns] = await Promise.all([
+    listUsers(),
+    listSecurities(),
+    getAllFeatureFlags(),
+    listRecentJobRuns(),
+  ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -33,18 +39,88 @@ export default async function AdminPage() {
       </div>
 
       <section className="rounded-lg border border-border bg-background-elevated p-6">
+        <h2 className="mb-1 text-title font-semibold">Job History</h2>
+        <p className="mb-4 text-body text-foreground-muted">
+          Every cron, admin-triggered, and CLI run of the daily price job, portfolio revaluation, dividends, and
+          weekly fundamentals writes a row here (see <code className="text-caption">JobRun</code> /{" "}
+          <code className="text-caption">@/lib/job-runs</code>) — this is how a silent failure (a Vercel function
+          timeout, an unhandled provider error) becomes visible instead of only showing up in Vercel&apos;s function
+          logs. A run stuck without a finished time is one that never completed.
+        </p>
+        {jobRuns.length === 0 ? (
+          <p className="text-body text-foreground-muted">No job runs recorded yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-body">
+              <thead>
+                <tr className="border-b border-border text-left text-caption text-foreground-muted">
+                  <th className="py-2 pr-4">Job</th>
+                  <th className="py-2 pr-4">Started</th>
+                  <th className="py-2 pr-4">Duration</th>
+                  <th className="py-2 pr-4">Status</th>
+                  <th className="py-2 pr-4">Processed</th>
+                  <th className="py-2">Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobRuns.map((run) => {
+                  const durationLabel = run.durationSeconds !== null ? `${run.durationSeconds}s` : run.stuck ? "never finished" : "running…";
+                  const statusLabel = run.status ?? (run.stuck ? "STUCK" : "RUNNING");
+                  const statusClass =
+                    run.status === "SUCCESS"
+                      ? "text-positive"
+                      : run.status === "FAILED" || run.stuck
+                        ? "text-negative"
+                        : run.status === "PARTIAL" || run.stillRunning
+                          ? "text-warning"
+                          : "text-foreground-muted";
+
+                  return (
+                    <tr key={run.id} className="border-b border-border last:border-0 align-top">
+                      <td className="py-2 pr-4 font-medium">{run.jobName}</td>
+                      <td className="py-2 pr-4 text-caption text-foreground-muted">
+                        {new Date(run.startedAt).toLocaleString("en-US")}
+                      </td>
+                      <td className="py-2 pr-4 text-caption text-foreground-muted">{durationLabel}</td>
+                      <td className={`py-2 pr-4 font-medium ${statusClass}`}>{statusLabel}</td>
+                      <td className="py-2 pr-4 font-financial">{run.symbolsProcessed ?? "—"}</td>
+                      <td className="py-2 max-w-xs truncate text-caption text-foreground-muted" title={run.errorMessage ?? undefined}>
+                        {run.errorMessage ?? "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-lg border border-border bg-background-elevated p-6">
         <h2 className="mb-1 text-title font-semibold">Daily close job</h2>
         <p className="mb-4 text-body text-foreground-muted">
-          Refreshes closing prices, resolves pending limit orders, and snapshots every account&apos;s value. Runs
-          automatically overnight in production; trigger it manually here for testing or to catch up.
+          Refreshes closing prices, resolves pending limit orders, posts any dividends due, and snapshots every
+          account&apos;s value. In production this is <code className="text-caption">/api/cron/daily-prices</code>,
+          run automatically by Vercel&apos;s scheduler across several staggered, batched invocations a day (see
+          vercel.json + DEPLOYMENT.md) — trigger the full, unbatched routine manually here right after a deploy to
+          verify it works, or to catch up.
         </p>
-        <DailyCloseTrigger />
+        <div className="flex flex-wrap gap-3">
+          <DailyCloseTrigger />
+          <QuarterlyDividendsTrigger />
+        </div>
+        <p className="mt-3 text-caption text-foreground-subtle">
+          The dividend check above is also its own scheduled route (
+          <code className="text-caption">/api/cron/quarterly-dividends</code>) — a safety net, since the daily close
+          already posts dividends as part of its own run and posting is idempotent either way.
+        </p>
       </section>
 
       <section className="rounded-lg border border-border bg-background-elevated p-6">
         <h2 className="mb-1 text-title font-semibold">Fundamentals &amp; history</h2>
         <p className="mb-4 text-body text-foreground-muted">
-          Market cap, valuation ratios, and analyst ratings refresh weekly (separately from the daily price job,
+          Market cap, valuation ratios, and analyst ratings refresh weekly via{" "}
+          <code className="text-caption">/api/cron/weekly-fundamentals</code> (separately from the daily price job,
           since they change slowly) — power each security&apos;s Analytics section. Price history backfill pulls
           full daily-close history for charting further back than the daily job alone provides.
         </p>

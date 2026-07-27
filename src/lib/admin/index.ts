@@ -1,4 +1,4 @@
-import { Prisma, type AssetType, type PrismaClient, type Role, type Security, type User } from "@prisma/client";
+import { Prisma, type AssetType, type JobRun, type PrismaClient, type Role, type Security, type User } from "@prisma/client";
 
 import { auth } from "@/lib/auth";
 import { getLatestPrice } from "@/lib/market-data";
@@ -100,9 +100,47 @@ export async function createSecurity(input: CreateSecurityInput, client: Client 
   });
 }
 
+// A run still un-finished this long after it started is treated as "stuck"
+// rather than merely "in progress" — every job in this app finishes in
+// well under a minute (see DEPLOYMENT.md), so 10 minutes is a generous
+// margin before flagging it as likely never coming back.
+const STUCK_THRESHOLD_MS = 10 * 60 * 1000;
+
+export type JobRunView = JobRun & {
+  durationSeconds: number | null;
+  stillRunning: boolean;
+  stuck: boolean;
+};
+
+/// Recent background-job invocations (price update, portfolio revaluation,
+/// fundamentals, dividends — see `@/lib/job-runs`) for the admin dashboard's
+/// Job History panel, most recent first. A row with `finishedAt` still null
+/// is a run that never completed — a duration timeout or crash that
+/// happened outside the job's own try/catch, so nothing else would show it
+/// — surfaced by the panel as "still running" (or "stuck" past
+/// `STUCK_THRESHOLD_MS`) rather than silently absent. The "is this stuck"
+/// classification is computed here (server-side, once, at data-fetch time)
+/// rather than in the page component, which would otherwise need to call
+/// `Date.now()` during render.
+export async function listRecentJobRuns(limit = 50, client: Client = defaultPrisma): Promise<JobRunView[]> {
+  const runs = await client.jobRun.findMany({ orderBy: { startedAt: "desc" }, take: limit });
+  const now = Date.now();
+
+  return runs.map((run) => {
+    const stillRunning = !run.finishedAt;
+    const stuck = stillRunning && now - run.startedAt.getTime() > STUCK_THRESHOLD_MS;
+    const durationSeconds = run.finishedAt
+      ? Math.max(0, Math.round((run.finishedAt.getTime() - run.startedAt.getTime()) / 1000))
+      : null;
+
+    return { ...run, durationSeconds, stillRunning, stuck };
+  });
+}
+
 export interface AdminService {
   requireAdmin: typeof requireAdmin;
   listUsers: typeof listUsers;
   listSecurities: typeof listSecurities;
   createSecurity: typeof createSecurity;
+  listRecentJobRuns: typeof listRecentJobRuns;
 }

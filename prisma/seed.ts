@@ -3,14 +3,23 @@ import "dotenv/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { AssetType, PrismaClient } from "@prisma/client";
 
+import { env } from "@/lib/env";
 import { FEATURE_FLAG_DEFINITIONS } from "@/lib/feature-flags";
 import { previousTradingDay } from "@/lib/market-data";
 
 import { BADGE_DEFINITIONS } from "./seed-badges";
 import { GLOSSARY_TERMS } from "./seed-glossary";
 import { COURSES } from "./seed-learning";
+// S&P 500 constituent list (ticker, name, GICS sector/industry) sourced from
+// Wikipedia's "List of S&P 500 companies" (itself sourced from the official
+// S&P Dow Jones Indices methodology docs) — there's no free live API for
+// index MEMBERSHIP itself (as opposed to prices), so this is a point-in-time
+// snapshot. Index composition changes periodically (additions/removals a
+// few times a year as S&P reconstitutes); refresh this file occasionally by
+// re-pulling the same source rather than assuming it stays current forever.
+import sp500Constituents from "./seed-data/sp500-constituents.json";
 
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+const adapter = new PrismaPg({ connectionString: env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
 
 // Fake seed closing prices — Tier 2 replaces these with real market data.
@@ -128,6 +137,42 @@ const SECTOR_CLASSIFICATIONS: Record<string, { sector: string; industry: string 
   XLK: { sector: "TECHNOLOGY", industry: "Sector Fund" },
 };
 
+// Maps the literal GICS sector names in seed-data/sp500-constituents.json to
+// this app's existing sector-key convention (see SECTOR_CLASSIFICATIONS
+// above and SECTOR_LABELS in @/lib/portfolio) — MATERIALS/UTILITIES/
+// REAL_ESTATE are new keys the original ~40-security seed never needed.
+const GICS_SECTOR_TO_APP_KEY: Record<string, string> = {
+  "Information Technology": "TECHNOLOGY",
+  "Health Care": "HEALTHCARE",
+  Financials: "FINANCIAL_SERVICES",
+  "Consumer Discretionary": "CONSUMER_CYCLICAL",
+  "Consumer Staples": "CONSUMER_DEFENSIVE",
+  "Communication Services": "COMMUNICATION_SERVICES",
+  Industrials: "INDUSTRIALS",
+  Energy: "ENERGY",
+  Materials: "MATERIALS",
+  Utilities: "UTILITIES",
+  "Real Estate": "REAL_ESTATE",
+};
+
+// `exchange` isn't part of the sourced GICS constituent data (see
+// seed-data/sp500-constituents.json's doc comment) and is purely cosmetic —
+// displayed on the security page and admin table, never used in trading
+// logic (see `searchSecurities`/`getSecurityBySymbol`). This sector-based
+// heuristic is a best-effort default for newly-created rows only; it never
+// overwrites a symbol's existing (accurate) exchange on re-seed.
+function guessExchange(sector: string): string {
+  const nasdaqSectors = new Set(["Information Technology", "Communication Services", "Health Care"]);
+  return nasdaqSectors.has(sector) ? "NASDAQ" : "NYSE";
+}
+
+// Placeholder close price for a brand-new S&P 500 constituent that has no
+// price yet — same fallback value `generateSyntheticPrice` uses when a
+// security has no prior price on record (see @/lib/market-data). Overwritten
+// within a day or two by the daily-close cron, or immediately by running
+// scripts/backfill-history.ts for real historical data.
+const NEW_SECURITY_PLACEHOLDER_PRICE = 100;
+
 async function main() {
   // Stamped as the most recent trading day, same convention the daily-close
   // job uses — so a fresh seed and a job run agree on which row is "latest".
@@ -160,6 +205,41 @@ async function main() {
 
   console.log(`Seeded ${SECURITIES.length} securities with a closing price dated ${date.toISOString().slice(0, 10)}.`);
   console.log(`Seeded sector/industry baseline for ${Object.keys(SECTOR_CLASSIFICATIONS).length} securities.`);
+
+  // Keyed by symbol, so a security already seeded above (e.g. AAPL, TSLA)
+  // just gets its sector/industry filled in here rather than duplicated —
+  // `where: { symbol }` upsert, same idempotent pattern as the loop above.
+  let sp500Created = 0;
+  for (const { symbol, name, sector, subIndustry } of sp500Constituents) {
+    const appSectorKey = GICS_SECTOR_TO_APP_KEY[sector] ?? sector;
+    const existing = await prisma.security.findUnique({ where: { symbol } });
+
+    const security = await prisma.security.upsert({
+      where: { symbol },
+      update: { name },
+      create: { symbol, name, assetType: "STOCK", exchange: guessExchange(sector) },
+    });
+    if (!existing) sp500Created += 1;
+
+    // Insert-only, same reasoning as the SECURITIES loop above: never
+    // clobber a real price the daily-close job or backfill script wrote.
+    await prisma.priceHistory.upsert({
+      where: { securityId_date: { securityId: security.id, date } },
+      update: {},
+      create: { securityId: security.id, date, closePrice: NEW_SECURITY_PLACEHOLDER_PRICE },
+    });
+
+    await prisma.securityFundamentals.upsert({
+      where: { securityId: security.id },
+      update: { sector: appSectorKey, industry: subIndustry },
+      create: { securityId: security.id, sector: appSectorKey, industry: subIndustry },
+    });
+  }
+
+  console.log(
+    `Seeded ${sp500Constituents.length} S&P 500 constituents (${sp500Created} newly created, ` +
+      `${sp500Constituents.length - sp500Created} already present).`,
+  );
 
   let lessonCount = 0;
   let questionCount = 0;

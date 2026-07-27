@@ -10,6 +10,18 @@ export const authConfig = {
     signIn: "/login",
   },
   session: { strategy: "jwt" },
+  // Auth.js auto-enables this when it sees `process.env.VERCEL` (set on every
+  // Vercel deployment), so this is redundant there — set explicitly anyway so
+  // trust doesn't silently depend on which platform env vars happen to be
+  // present. Safe here specifically because NEXTAUTH_URL is always set to
+  // our own known domain (see env.ts) — trustHost only matters for how
+  // X-Forwarded-Host is interpreted, and we're not relying on an untrusted
+  // request header to determine that host.
+  trustHost: true,
+  // Secure, __Host-/__Secure--prefixed cookies are Auth.js's default whenever
+  // it detects an https:// URL (NEXTAUTH_URL in production) — nothing to set
+  // explicitly here; see DEPLOYMENT.md for the one thing that does need to be
+  // set correctly (NEXTAUTH_URL itself, to the final custom domain).
   providers: [],
   callbacks: {
     jwt({ token, user, trigger, session }) {

@@ -6,7 +6,12 @@ import { authConfig } from "@/lib/auth.config";
 const { auth } = NextAuth(authConfig);
 
 const AUTH_PAGES = ["/login", "/signup"];
-const PUBLIC_API_PREFIXES = ["/api/auth", "/api/signup"];
+// `/api/cron/*` authenticates itself via CRON_SECRET (see `@/lib/cron-auth`)
+// — Vercel's scheduler and the health monitor hitting `/api/health` have no
+// session cookie, so both must bypass the login redirect below or every
+// scheduled/monitored request would 302 to /login instead of ever reaching
+// the route handler.
+const PUBLIC_API_PREFIXES = ["/api/auth", "/api/signup", "/api/cron", "/api/health"];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;

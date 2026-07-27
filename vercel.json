@@ -1,0 +1,273 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/cron/daily-prices?offset=0&limit=8",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=8&limit=8",
+      "schedule": "2 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=16&limit=8",
+      "schedule": "4 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=24&limit=8",
+      "schedule": "6 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=32&limit=8",
+      "schedule": "8 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=40&limit=8",
+      "schedule": "10 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=48&limit=8",
+      "schedule": "12 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=56&limit=8",
+      "schedule": "14 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=64&limit=8",
+      "schedule": "16 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=72&limit=8",
+      "schedule": "18 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=80&limit=8",
+      "schedule": "20 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=88&limit=8",
+      "schedule": "22 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=96&limit=8",
+      "schedule": "24 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=104&limit=8",
+      "schedule": "26 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=112&limit=8",
+      "schedule": "28 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=120&limit=8",
+      "schedule": "30 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=128&limit=8",
+      "schedule": "32 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=136&limit=8",
+      "schedule": "34 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=144&limit=8",
+      "schedule": "36 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=152&limit=8",
+      "schedule": "38 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=160&limit=8",
+      "schedule": "40 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=168&limit=8",
+      "schedule": "42 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=176&limit=8",
+      "schedule": "44 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=184&limit=8",
+      "schedule": "46 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=192&limit=8",
+      "schedule": "48 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=200&limit=8",
+      "schedule": "50 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=208&limit=8",
+      "schedule": "52 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=216&limit=8",
+      "schedule": "54 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=224&limit=8",
+      "schedule": "56 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=232&limit=8",
+      "schedule": "58 6 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=240&limit=8",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=248&limit=8",
+      "schedule": "2 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=256&limit=8",
+      "schedule": "4 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=264&limit=8",
+      "schedule": "6 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=272&limit=8",
+      "schedule": "8 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=280&limit=8",
+      "schedule": "10 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=288&limit=8",
+      "schedule": "12 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=296&limit=8",
+      "schedule": "14 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=304&limit=8",
+      "schedule": "16 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=312&limit=8",
+      "schedule": "18 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=320&limit=8",
+      "schedule": "20 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=328&limit=8",
+      "schedule": "22 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=336&limit=8",
+      "schedule": "24 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=344&limit=8",
+      "schedule": "26 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=352&limit=8",
+      "schedule": "28 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=360&limit=8",
+      "schedule": "30 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=368&limit=8",
+      "schedule": "32 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=376&limit=8",
+      "schedule": "34 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=384&limit=8",
+      "schedule": "36 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=392&limit=8",
+      "schedule": "38 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=400&limit=8",
+      "schedule": "40 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=408&limit=8",
+      "schedule": "42 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=416&limit=8",
+      "schedule": "44 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=424&limit=8",
+      "schedule": "46 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=432&limit=8",
+      "schedule": "48 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=440&limit=8",
+      "schedule": "50 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=448&limit=8",
+      "schedule": "52 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=456&limit=8",
+      "schedule": "54 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=464&limit=8",
+      "schedule": "56 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=472&limit=8",
+      "schedule": "58 7 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=480&limit=8",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=488&limit=8",
+      "schedule": "2 8 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=496&limit=8",
+      "schedule": "4 8 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=504&limit=8",
+      "schedule": "6 8 * * *"
+    },
+    {
+      "path": "/api/cron/daily-prices?offset=512&limit=8",
+      "schedule": "8 8 * * *"
+    },
+    {
+      "path": "/api/cron/quarterly-dividends",
+      "schedule": "15 8 * * *"
+    },
+    {
+      "path": "/api/cron/weekly-fundamentals",
+      "schedule": "25 8 * * 1"
+    }
+  ]
+}

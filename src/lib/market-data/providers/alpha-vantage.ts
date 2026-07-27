@@ -1,3 +1,5 @@
+import { env } from "@/lib/env";
+
 import type { EodQuote, FundamentalsQuote, MarketDataProvider, NewsHeadline } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -12,7 +14,7 @@ export const ALPHA_VANTAGE_FREE_TIER_MAX_REQUESTS_PER_DAY = 25;
 export const ALPHA_VANTAGE_REQUEST_INTERVAL_MS = 13_000;
 
 async function fetchEodClose(symbol: string): Promise<EodQuote | null> {
-  const apiKey = process.env.MARKET_DATA_API_KEY;
+  const apiKey = env.MARKET_DATA_API_KEY;
   if (!apiKey) return null;
 
   try {
@@ -53,7 +55,7 @@ async function fetchEodClose(symbol: string): Promise<EodQuote | null> {
 /// it) in a single call — used for the one-time price-history backfill, not
 /// the daily job (which only needs the latest close).
 async function fetchDailyHistory(symbol: string): Promise<EodQuote[] | null> {
-  const apiKey = process.env.MARKET_DATA_API_KEY;
+  const apiKey = env.MARKET_DATA_API_KEY;
   if (!apiKey) return null;
 
   try {
@@ -106,7 +108,7 @@ function parseOverviewBigIntString(value: string | undefined): string | null {
 }
 
 async function fetchFundamentals(symbol: string): Promise<FundamentalsQuote | null> {
-  const apiKey = process.env.MARKET_DATA_API_KEY;
+  const apiKey = env.MARKET_DATA_API_KEY;
   if (!apiKey) return null;
 
   try {
@@ -155,7 +157,7 @@ function parseNewsTimestamp(raw: string | undefined): string | null {
 }
 
 async function fetchNews(symbol: string): Promise<NewsHeadline[] | null> {
-  const apiKey = process.env.MARKET_DATA_API_KEY;
+  const apiKey = env.MARKET_DATA_API_KEY;
   if (!apiKey) return null;
 
   try {
